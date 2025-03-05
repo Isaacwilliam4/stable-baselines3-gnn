@@ -108,34 +108,47 @@ class NatureCNN(BaseFeaturesExtractor):
         return self.linear(self.cnn(observations))
     
 
-class GNN(BaseFeaturesExtractor):
-    def __init__(
-        self,
-        observation_space: gym.Space,
-        features_dim: int = 512,
-    ) -> None:
-        super().__init__(observation_space, features_dim)
+class GNN(nn.Module):
+    def __init__(self, observation_space):
+        super().__init__()
 
-        n_input_channels = observation_space.shape[0]
+        n_input_channels = observation_space['observation_space'].shape[0]
 
-        self.gnn = nn.Sequential(
-            GCNConv(n_input_channels, 2048),
-            nn.ReLU(),
-            GCNConv(n_input_channels, 1024),
-            nn.ReLU(),
-            GCNConv(n_input_channels, 512),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
+        # Define GCN layers explicitly
+        self.conv1 = GCNConv(n_input_channels, 2048)
+        self.conv2 = GCNConv(2048, 1024)
+        self.conv3 = GCNConv(1024, 512)
+        self.relu = nn.ReLU()
 
-        # Compute shape by doing one forward pass
+        # Compute output shape
         with th.no_grad():
-            n_flatten = self.gnn(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
+            sample_obs = th.as_tensor(
+                observation_space['observation_space'].sample()[None]
+            ).float()
+            
+            edge_index = th.as_tensor(
+                observation_space['edge_idx'].low
+            ).long()  # Ensure edge indices are in long format
+            
+            x = self.forward_gnn(sample_obs.view(sample_obs.shape[0], -1, n_input_channels), edge_index)  # Get flattened size
+            n_flatten = x.shape[1]
 
-        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+        self.fc = nn.Linear(n_flatten, 256)  # Example output layer
 
-    def forward(self, observations: th.Tensor) -> th.Tensor:
-        return self.linear(self.gnn(observations))
+    def forward_gnn(self, x, edge_index):
+        """Pass data through GCN layers"""
+        x = self.conv1(x, edge_index)
+        x = self.relu(x)
+        x = self.conv2(x, edge_index)
+        x = self.relu(x)
+        x = self.conv3(x, edge_index)
+        x = self.relu(x)
+        return x.view(x.shape[0], -1)  # Flatten
+
+    def forward(self, x, edge_index):
+        x = self.forward_gnn(x, edge_index)
+        x = self.fc(x)
+        return x
 
 
 def create_mlp(

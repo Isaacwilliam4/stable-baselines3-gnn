@@ -75,7 +75,7 @@ class PPO(OnPolicyAlgorithm):
         "MlpPolicy": ActorCriticPolicy,
         "CnnPolicy": ActorCriticCnnPolicy,
         "MultiInputPolicy": MultiInputActorCriticPolicy,
-        "GCNPolicy": ActorCriticGNNPolicy,
+        "GNNPolicy": ActorCriticGNNPolicy,
     }
 
     def __init__(
