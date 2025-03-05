@@ -8,6 +8,7 @@ from torch import nn
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.type_aliases import TensorDict
 from stable_baselines3.common.utils import get_device
+from torch_geometric.nn import GCNConv
 
 
 class BaseFeaturesExtractor(nn.Module):
@@ -105,6 +106,36 @@ class NatureCNN(BaseFeaturesExtractor):
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.linear(self.cnn(observations))
+    
+
+class GNN(BaseFeaturesExtractor):
+    def __init__(
+        self,
+        observation_space: gym.Space,
+        features_dim: int = 512,
+    ) -> None:
+        super().__init__(observation_space, features_dim)
+
+        n_input_channels = observation_space.shape[0]
+
+        self.gnn = nn.Sequential(
+            GCNConv(n_input_channels, 2048),
+            nn.ReLU(),
+            GCNConv(n_input_channels, 1024),
+            nn.ReLU(),
+            GCNConv(n_input_channels, 512),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        # Compute shape by doing one forward pass
+        with th.no_grad():
+            n_flatten = self.gnn(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
+
+        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+
+    def forward(self, observations: th.Tensor) -> th.Tensor:
+        return self.linear(self.gnn(observations))
 
 
 def create_mlp(
