@@ -108,35 +108,35 @@ class NatureCNN(BaseFeaturesExtractor):
         return self.linear(self.cnn(observations))
     
 
-class GNN(nn.Module):
-    def __init__(self, observation_space):
-        super().__init__()
+class GNN(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim: int = 512):
+        super().__init__(observation_space, features_dim)
 
-        n_input_channels = observation_space['observation_space'].shape[0]
+        n_input_channels = observation_space['x'].shape[1]
 
-        # Define GCN layers explicitly
-        self.conv1 = GCNConv(n_input_channels, 2048)
-        self.conv2 = GCNConv(2048, 1024)
-        self.conv3 = GCNConv(1024, 512)
+        self.conv1 = GCNConv(n_input_channels, 512)
+        self.conv2 = GCNConv(512, 256)
+        self.conv3 = GCNConv(256, 128)
         self.relu = nn.ReLU()
 
         # Compute output shape
         with th.no_grad():
             sample_obs = th.as_tensor(
-                observation_space['observation_space'].sample()[None]
+                observation_space['x'].sample()[None]
             ).float()
             
             edge_index = th.as_tensor(
-                observation_space['edge_idx'].low
-            ).long()  # Ensure edge indices are in long format
+                observation_space['edge_index'].low
+            ).long() 
             
-            x = self.forward_gnn(sample_obs.view(sample_obs.shape[0], -1, n_input_channels), edge_index)  # Get flattened size
+            x = self.forward_gnn(sample_obs, edge_index)
             n_flatten = x.shape[1]
 
-        self.fc = nn.Linear(n_flatten, 256)  # Example output layer
+        self.fc = nn.Linear(n_flatten, features_dim)
 
     def forward_gnn(self, x, edge_index):
         """Pass data through GCN layers"""
+        edge_index = edge_index.to(th.int64)
         x = self.conv1(x, edge_index)
         x = self.relu(x)
         x = self.conv2(x, edge_index)
