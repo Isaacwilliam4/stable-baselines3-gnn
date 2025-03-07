@@ -8,8 +8,8 @@ from torch import nn
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.type_aliases import TensorDict
 from stable_baselines3.common.utils import get_device
-from torch_geometric.nn import GCNConv
-
+from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.data import Batch, Data, DataLoader
 
 class BaseFeaturesExtractor(nn.Module):
     """
@@ -129,7 +129,7 @@ class GNN(BaseFeaturesExtractor):
                 observation_space['edge_index'].low
             ).long() 
             
-            x = self.forward_gnn(sample_obs, edge_index)
+            x = self.forward_batching(dict(x=sample_obs, edge_index=edge_index.unsqueeze(0)))
             n_flatten = x.shape[1]
 
         self.fc = nn.Linear(n_flatten, features_dim)
@@ -145,10 +145,29 @@ class GNN(BaseFeaturesExtractor):
         x = self.relu(x)
         return x.view(x.shape[0], -1)  # Flatten
 
-    def forward(self, x, edge_index):
-        x = self.forward_gnn(x, edge_index)
-        x = self.fc(x)
+    def forward_batching(self, observations):
+        """Convert SB3 observations into batched PyG Data objects"""
+        data_list = []
+        for i in range(len(observations['x'])):
+            data_list.append(Data(
+                x=observations['x'][i], 
+                edge_index=observations['edge_index'][i]
+            ))
+
+        # Use PyG DataLoader for efficient batching
+        loader = DataLoader(data_list, batch_size=len(data_list), shuffle=False)
+        batch = next(iter(loader))
+
+        # Forward pass through GNN
+        x = self.forward_gnn(batch.x, batch.edge_index)
+
+        # Pool to graph-level representation
+        x = global_mean_pool(x, batch.batch)
+
         return x
+    
+    def forward(self, observations: th.Tensor) -> th.Tensor:
+        return self.fc(self.forward_batching(observations))
 
 
 def create_mlp(

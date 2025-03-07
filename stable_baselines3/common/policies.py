@@ -129,8 +129,8 @@ class BaseModel(nn.Module):
         :return: The extracted features
         """
         preprocessed_obs = preprocess_obs(obs, self.observation_space, normalize_images=self.normalize_images)
-        if isinstance(preprocessed_obs, dict):
-            return features_extractor(**preprocessed_obs)
+        # if isinstance(preprocessed_obs, dict):
+        #     return features_extractor(**preprocessed_obs)
         return features_extractor(preprocessed_obs)
 
     def _get_constructor_parameters(self) -> dict[str, Any]:
