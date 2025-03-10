@@ -9,7 +9,8 @@ from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_ima
 from stable_baselines3.common.type_aliases import TensorDict
 from stable_baselines3.common.utils import get_device
 from torch_geometric.nn import GCNConv, global_mean_pool
-from torch_geometric.data import Batch, Data, DataLoader
+from torch_geometric.data import Batch, Data
+from torch_geometric.loader import DataLoader
 
 class BaseFeaturesExtractor(nn.Module):
     """
@@ -114,25 +115,11 @@ class GNN(BaseFeaturesExtractor):
 
         n_input_channels = observation_space['x'].shape[1]
 
-        self.conv1 = GCNConv(n_input_channels, 512)
-        self.conv2 = GCNConv(512, 256)
-        self.conv3 = GCNConv(256, 128)
+        self.conv1 = GCNConv(n_input_channels, 256)
+        self.conv2 = GCNConv(256, 128)
+        self.conv3 = GCNConv(128, 64)
+        self.fc = nn.Linear(64, features_dim)
         self.relu = nn.ReLU()
-
-        # Compute output shape
-        with th.no_grad():
-            sample_obs = th.as_tensor(
-                observation_space['x'].sample()[None]
-            ).float()
-            
-            edge_index = th.as_tensor(
-                observation_space['edge_index'].low
-            ).long() 
-            
-            x = self.forward_batching(dict(x=sample_obs, edge_index=edge_index.unsqueeze(0)))
-            n_flatten = x.shape[1]
-
-        self.fc = nn.Linear(n_flatten, features_dim)
 
     def forward_gnn(self, x, edge_index):
         """Pass data through GCN layers"""
@@ -145,7 +132,7 @@ class GNN(BaseFeaturesExtractor):
         x = self.relu(x)
         return x.view(x.shape[0], -1)  # Flatten
 
-    def forward_batching(self, observations):
+    def forward(self, observations):
         """Convert SB3 observations into batched PyG Data objects"""
         data_list = []
         for i in range(len(observations['x'])):
@@ -154,9 +141,7 @@ class GNN(BaseFeaturesExtractor):
                 edge_index=observations['edge_index'][i]
             ))
 
-        # Use PyG DataLoader for efficient batching
-        loader = DataLoader(data_list, batch_size=len(data_list), shuffle=False)
-        batch = next(iter(loader))
+        batch = Batch.from_data_list(data_list)
 
         # Forward pass through GNN
         x = self.forward_gnn(batch.x, batch.edge_index)
@@ -164,10 +149,7 @@ class GNN(BaseFeaturesExtractor):
         # Pool to graph-level representation
         x = global_mean_pool(x, batch.batch)
 
-        return x
-    
-    def forward(self, observations: th.Tensor) -> th.Tensor:
-        return self.fc(self.forward_batching(observations))
+        return self.fc(x)
 
 
 def create_mlp(
