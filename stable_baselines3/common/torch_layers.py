@@ -115,10 +115,10 @@ class GNN(BaseFeaturesExtractor):
 
         n_input_channels = observation_space['x'].shape[1]
 
-        self.conv1 = GCNConv(n_input_channels, 256)
-        self.conv2 = GCNConv(256, 128)
-        self.conv3 = GCNConv(128, 64)
-        self.fc = nn.Linear(64, features_dim)
+        self.conv1 = GCNConv(n_input_channels, 64)
+        self.conv2 = GCNConv(64, 128)
+        self.conv3 = GCNConv(128, 256)
+        self.fc = nn.Linear(256, features_dim)
         self.relu = nn.ReLU()
 
     def forward_gnn(self, x, edge_index):
@@ -130,7 +130,7 @@ class GNN(BaseFeaturesExtractor):
         x = self.relu(x)
         x = self.conv3(x, edge_index)
         x = self.relu(x)
-        return x.view(x.shape[0], -1)  # Flatten
+        return x
 
     def forward(self, observations):
         """Convert SB3 observations into batched PyG Data objects"""
