@@ -46,6 +46,20 @@ class FlattenExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.flatten(observations)
+    
+class IdentityExtractor(BaseFeaturesExtractor):
+    """
+    Returns the input as is.
+
+    :param observation_space: The observation space of the environment
+    """
+
+    def __init__(self, observation_space: gym.Space) -> None:
+        super().__init__(observation_space, get_flattened_obs_dim(observation_space))
+
+
+    def forward(self, observations: th.Tensor) -> th.Tensor:
+        return observations
 
 
 class NatureCNN(BaseFeaturesExtractor):
