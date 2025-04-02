@@ -165,6 +165,44 @@ class GNN(BaseFeaturesExtractor):
 
         return self.fc(x)
 
+class GNNFlow(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim: int = 512):
+        super().__init__(observation_space, features_dim)
+
+        n_input_channels = observation_space['x'].shape[1]
+
+        self.conv1 = GCNConv(n_input_channels, 64)
+        self.conv2 = GCNConv(64, 128)
+        self.conv3 = GCNConv(128, 256)
+        self.fc = nn.Linear(256, features_dim)
+        self.relu = nn.ReLU()
+
+    def forward_gnn(self, x, edge_index):
+        """Pass data through GCN layers"""
+        edge_index = edge_index.to(th.int64)
+        x = self.conv1(x, edge_index)
+        x = self.relu(x)
+        x = self.conv2(x, edge_index)
+        x = self.relu(x)
+        x = self.conv3(x, edge_index)
+        x = self.relu(x)
+        return x
+
+    def forward(self, observations):
+        """Convert SB3 observations into batched PyG Data objects"""
+        data_list = []
+        for i in range(len(observations['x'])):
+            data_list.append(Data(
+                x=observations['x'][i], 
+                edge_index=observations['edge_index'][i]
+            ))
+
+        batch = Batch.from_data_list(data_list)
+
+        # Forward pass through GNN
+        x = self.forward_gnn(batch.x, batch.edge_index)
+
+        return self.fc(x)
 
 def create_mlp(
     input_dim: int,
@@ -242,7 +280,7 @@ def create_mlp(
     return modules
 
 
-class FlowMlpCritic(nn.Module):
+class FlowMlpExtractor(nn.Module):
     """
     Constructs an MLP that receives the output from a previous features extractor (i.e. a CNN) or directly
     the observations (if no features extractor is applied) as an input and outputs a latent representation
@@ -277,26 +315,68 @@ class FlowMlpCritic(nn.Module):
         super().__init__()
         device = get_device(device)
         policy_net: list[nn.Module] = []
+        value_net: list[nn.Module] = []
         last_layer_dim_pi = feature_dim
+        last_layer_dim_vf = feature_dim
 
-        
+        # save dimensions of layers in policy and value nets
+        if isinstance(net_arch, dict):
+            # Note: if key is not specified, assume linear network
+            pi_layers_dims = net_arch.get("pi", [])  # Layer sizes of the policy network
+            vf_layers_dims = net_arch.get("vf", [])  # Layer sizes of the value network
+        else:
+            pi_layers_dims = vf_layers_dims = net_arch
+        # Iterate through the policy layers and build the policy net
+        for curr_layer_dim in pi_layers_dims:
+            policy_net.append(nn.Linear(last_layer_dim_pi, curr_layer_dim))
+            policy_net.append(activation_fn())
+            last_layer_dim_pi = curr_layer_dim
+        # Iterate through the value layers and build the value net
+        for curr_layer_dim in vf_layers_dims:
+            value_net.append(nn.Linear(last_layer_dim_vf, curr_layer_dim))
+            value_net.append(activation_fn())
+            last_layer_dim_vf = curr_layer_dim
 
         # Save dim, used to create the distributions
         self.latent_dim_pi = last_layer_dim_pi
+        self.latent_dim_vf = last_layer_dim_vf
 
         # Create networks
         # If the list of layers is empty, the network will just act as an Identity module
         self.policy_net = nn.Sequential(*policy_net).to(device)
+        self.value_net = nn.Sequential(*value_net).to(device)
 
     def forward(self, features: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         :return: latent_policy, latent_value of the specified network.
             If all layers are shared, then ``latent_policy == latent_value``
         """
-        return self.forward_actor(features)
+        return self.forward_actor(features), self.forward_critic(features)
 
     def forward_actor(self, features: th.Tensor) -> th.Tensor:
+        print()
         return self.policy_net(features)
+
+    def forward_critic(self, features: th.Tensor) -> th.Tensor:
+        return self.value_net(features)
+    
+class MlpChooser(nn.Module):
+    def __init__(self, feature_dim: int, device: Union[th.device, str] = "auto") -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.device = get_device(device)
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(feature_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+            nn.Sigmoid()
+        ).to(self.device)
+
+    def forward(self, features: th.Tensor) -> th.Tensor:
+        return self.mlp(features)
 
 class MlpExtractor(nn.Module):
     """
