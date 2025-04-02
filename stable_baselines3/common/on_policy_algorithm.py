@@ -183,6 +183,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
 
+        actions_dict = None
+
         n_steps = 0
         rollout_buffer.reset()
         # Sample new weights for the state dependent exploration
@@ -200,11 +202,14 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
+
+            if isinstance(self.action_space, spaces.Dict):
+                actions_dict = actions
+                actions = actions["actions"]
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
             clipped_actions = actions
-
             if isinstance(self.action_space, spaces.Box):
                 if self.policy.squash_output:
                     # Unscale the actions to match env bounds
@@ -214,8 +219,12 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     # Otherwise, clip the actions to avoid out of bound error
                     # as we are sampling from an unbounded Gaussian distribution
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
-
-            new_obs, rewards, dones, infos = env.step(clipped_actions)
+            
+            if actions_dict is not None:
+                actions_dict["actions"] = clipped_actions
+                new_obs, rewards, dones, infos = env.step(actions_dict)
+            else:
+                new_obs, rewards, dones, infos = env.step(clipped_actions)
 
             self.num_timesteps += env.num_envs
 
@@ -244,14 +253,25 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                         terminal_value = self.policy.predict_values(terminal_obs)[0]  # type: ignore[arg-type]
                     rewards[idx] += self.gamma * terminal_value
 
-            rollout_buffer.add(
-                self._last_obs,  # type: ignore[arg-type]
-                actions,
-                rewards,
-                self._last_episode_starts,  # type: ignore[arg-type]
-                values,
-                log_probs,
-            )
+            if actions_dict is not None:
+                rollout_buffer.add(
+                    self._last_obs,  # type: ignore[arg-type]
+                    actions_dict,
+                    rewards,
+                    self._last_episode_starts,  # type: ignore[arg-type]
+                    values,
+                    log_probs,
+                )
+            else:
+                rollout_buffer.add(
+                    self._last_obs,  # type: ignore[arg-type]
+                    actions,
+                    rewards,
+                    self._last_episode_starts,  # type: ignore[arg-type]
+                    values,
+                    log_probs,
+                )
+
             self._last_obs = new_obs  # type: ignore[assignment]
             self._last_episode_starts = dones
 

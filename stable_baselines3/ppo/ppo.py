@@ -134,6 +134,7 @@ class PPO(OnPolicyAlgorithm):
                 spaces.Discrete,
                 spaces.MultiDiscrete,
                 spaces.MultiBinary,
+                spaces.Dict,
             ),
         )
 

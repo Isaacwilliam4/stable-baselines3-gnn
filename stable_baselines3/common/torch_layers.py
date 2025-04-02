@@ -308,8 +308,8 @@ class FlowMlpExtractor(nn.Module):
     def __init__(
         self,
         feature_dim: int,
-        net_arch: Union[list[int], dict[str, list[int]]],
         activation_fn: type[nn.Module],
+        max_extracted: int = 100,
         device: Union[th.device, str] = "auto",
     ) -> None:
         super().__init__()
@@ -318,7 +318,8 @@ class FlowMlpExtractor(nn.Module):
         value_net: list[nn.Module] = []
         last_layer_dim_pi = feature_dim
         last_layer_dim_vf = feature_dim
-
+        net_arch = dict(pi=[feature_dim, 640, 1024],
+                        vf=[feature_dim, 256, 128, 64])
         # save dimensions of layers in policy and value nets
         if isinstance(net_arch, dict):
             # Note: if key is not specified, assume linear network
@@ -354,7 +355,6 @@ class FlowMlpExtractor(nn.Module):
         return self.forward_actor(features), self.forward_critic(features)
 
     def forward_actor(self, features: th.Tensor) -> th.Tensor:
-        print()
         return self.policy_net(features)
 
     def forward_critic(self, features: th.Tensor) -> th.Tensor:
@@ -372,7 +372,7 @@ class MlpChooser(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
-            nn.Sigmoid()
+            nn.Softmax()
         ).to(self.device)
 
     def forward(self, features: th.Tensor) -> th.Tensor:

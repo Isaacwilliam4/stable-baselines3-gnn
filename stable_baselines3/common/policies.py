@@ -827,6 +827,12 @@ class ActorCriticFlowPolicy(BasePolicy):
             # Small values to avoid NaN in Adam optimizer
             if optimizer_class == th.optim.Adam:
                 optimizer_kwargs["eps"] = 1e-5
+        self.action_spaces = None
+
+        if isinstance(action_space, spaces.Dict):
+            self.action_spaces = action_space
+            action_space = action_space["actions"]
+
 
         super().__init__(
             observation_space,
@@ -874,7 +880,7 @@ class ActorCriticFlowPolicy(BasePolicy):
         self.log_std_init = log_std_init
         dist_kwargs = None
 
-        self.features_extractor.features_dim
+        # self.features_extractor.features_dim
         self.mlp_chooser = MlpChooser(self.features_extractor.features_dim)
 
         assert not (squash_output and not use_sde), "squash_output=True is only available when using gSDE (use_sde=True)"
@@ -894,6 +900,7 @@ class ActorCriticFlowPolicy(BasePolicy):
         self.action_dist = make_proba_distribution(action_space, use_sde=use_sde, dist_kwargs=dist_kwargs)
 
         self._build(lr_schedule)
+        self.num_nodes = self.observation_space['x'].shape[0]
 
     def _get_constructor_parameters(self) -> dict[str, Any]:
         data = super()._get_constructor_parameters()
@@ -936,13 +943,12 @@ class ActorCriticFlowPolicy(BasePolicy):
         # Note: If net_arch is None and some features extractor is used,
         #       net_arch here is an empty list and mlp_extractor does not
         #       really contain any layers (acts like an identity module).
-        features_dim_flow = th.zeros((self.max_extracted, 24)).flatten().shape[0]
 
         self.mlp_extractor = FlowMlpExtractor(
-            features_dim_flow,
-            net_arch=self.net_arch,
+            self.features_extractor.features_dim,
             activation_fn=self.activation_fn,
             device=self.device,
+            max_extracted=self.max_extracted,
         )
 
     def _build(self, lr_schedule: Schedule) -> None:
@@ -1006,22 +1012,27 @@ class ActorCriticFlowPolicy(BasePolicy):
         """
         # Preprocess the observation if needed
         features = self.extract_features(obs)
-
-        choices = self.mlp_chooser(features)
+        #(batch_size, num_nodes, embedding_dim)
+        _features = features.reshape(-1, self.num_nodes, self.features_extractor.features_dim)
+        choices = self.mlp_chooser(_features)
+        #(batch_size, num_nodes)
+        choices = choices.reshape(-1, self.num_nodes)
+        _, choice_idxs = th.topk(choices, self.max_extracted, dim=1)
+        chosen_embeddings = th.gather(_features, 1, choice_idxs.unsqueeze(-1).expand(-1, -1, self.features_extractor.features_dim))
 
         if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
+            latent_pi, latent_vf = self.mlp_extractor(chosen_embeddings)
         else:
-            pi_features, vf_features = features
+            pi_features, vf_features = chosen_embeddings
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        # Evaluate the values for the given observations
-        values = self.value_net(latent_vf)
         distribution = self._get_action_dist_from_latent(latent_pi)
+        values = self.value_net(latent_vf)
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
-        actions = actions.reshape((-1, *self.action_space.shape))  # type: ignore[misc]
-        return actions, values, log_prob
+        actions = actions.reshape(-1, self.max_extracted, self.max_extracted, 24)
+        actions_dict = dict(actions=actions, link_ids=choice_idxs)
+        return actions_dict, values, log_prob
 
     def extract_features(  # type: ignore[override]
         self, obs: PyTorchObs, features_extractor: Optional[BaseFeaturesExtractor] = None
@@ -1094,10 +1105,16 @@ class ActorCriticFlowPolicy(BasePolicy):
         """
         # Preprocess the observation if needed
         features = self.extract_features(obs)
+        _features = features.reshape(-1, self.num_nodes, self.features_extractor.features_dim)
+        choices = self.mlp_chooser(_features)
+        #(batch_size, num_nodes)
+        choices = choices.reshape(-1, self.num_nodes)
+        _, choice_idxs = th.topk(choices, self.max_extracted, dim=1)
+        chosen_embeddings = th.gather(_features, 1, choice_idxs.unsqueeze(-1).expand(-1, -1, self.features_extractor.features_dim))
         if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
+            latent_pi, latent_vf = self.mlp_extractor(chosen_embeddings)
         else:
-            pi_features, vf_features = features
+            pi_features, vf_features = chosen_embeddings
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
         distribution = self._get_action_dist_from_latent(latent_pi)

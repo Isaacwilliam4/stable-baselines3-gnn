@@ -207,6 +207,8 @@ def get_action_dim(action_space: spaces.Space) -> int:
             action_space.n, int
         ), f"Multi-dimensional MultiBinary({action_space.n}) action space is not supported. You can flatten it instead."
         return int(action_space.n)
+    elif isinstance(action_space, spaces.Dict):
+        return int(np.prod(action_space.spaces['actions'].shape))
     else:
         raise NotImplementedError(f"{action_space} action space is not supported")
 

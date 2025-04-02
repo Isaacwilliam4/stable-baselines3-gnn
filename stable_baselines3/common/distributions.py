@@ -687,6 +687,9 @@ def make_proba_distribution(
             action_space.n, int
         ), f"Multi-dimensional MultiBinary({action_space.n}) action space is not supported. You can flatten it instead."
         return BernoulliDistribution(action_space.n, **dist_kwargs)
+    elif isinstance(action_space, spaces.Dict):
+        cls = StateDependentNoiseDistribution if use_sde else DiagGaussianDistribution
+        return cls(get_action_dim(action_space['actions']), **dist_kwargs)
     else:
         raise NotImplementedError(
             "Error: probability distribution, not implemented for action space"
