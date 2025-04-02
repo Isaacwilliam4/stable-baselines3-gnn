@@ -8,7 +8,7 @@ from torch.nn import functional as F
 
 from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
-from stable_baselines3.common.policies import ActorCriticCnnPolicy, ActorCriticGNNPolicy, ActorCriticPolicy, BasePolicy, MultiInputActorCriticPolicy, ActorCriticFlowPolicy
+from stable_baselines3.common.policies import ActorCriticCnnPolicy, ActorCriticGNNPolicy, ActorCriticPolicy, BasePolicy, MultiInputActorCriticPolicy, ActorCriticFlowPolicy, ActorCriticStatFlowPolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 
@@ -76,7 +76,8 @@ class PPO(OnPolicyAlgorithm):
         "CnnPolicy": ActorCriticCnnPolicy,
         "MultiInputPolicy": MultiInputActorCriticPolicy,
         "GNNPolicy": ActorCriticGNNPolicy,
-        "FlowMlpPolicy": ActorCriticFlowPolicy
+        "FlowMlpPolicy": ActorCriticFlowPolicy,
+        "StatFlowMlpPolicy": ActorCriticStatFlowPolicy,
     }
 
     def __init__(
