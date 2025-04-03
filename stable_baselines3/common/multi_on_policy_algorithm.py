@@ -15,10 +15,10 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedul
 from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 from stable_baselines3.common.vec_env import VecEnv
 
-SelfOnPolicyAlgorithm = TypeVar("SelfOnPolicyAlgorithm", bound="OnPolicyAlgorithm")
+SelfOnPolicyAlgorithm = TypeVar("SelfOnPolicyAlgorithm", bound="MultiOnPolicyAlgorithm")
 
 
-class OnPolicyAlgorithm(BaseAlgorithm):
+class MultiOnPolicyAlgorithm(BaseAlgorithm):
     """
     The base for On-Policy algorithms (ex: A2C/PPO).
 
@@ -263,8 +263,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                         terminal_value = self.policy.predict_values(terminal_obs)[0]  # type: ignore[arg-type]
                     rewards[idx] += self.gamma * terminal_value
 
-            if isinstance(actions, dict):
-                
 
             rollout_buffer.add(
                 self._last_obs,  # type: ignore[arg-type]
