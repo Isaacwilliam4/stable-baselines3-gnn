@@ -1194,7 +1194,7 @@ class ActorCriticStatFlowPolicy(BasePolicy):
         squash_output: bool = False,
         features_extractor_class: type[BaseFeaturesExtractor] = StatGNNFlow,
         features_extractor_kwargs: Optional[dict[str, Any]] = None,
-        share_features_extractor: bool = True,
+        share_features_extractor: bool = False,
         normalize_images: bool = True,
         optimizer_class: type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[dict[str, Any]] = None,
@@ -1388,22 +1388,12 @@ class ActorCriticStatFlowPolicy(BasePolicy):
         :param deterministic: Whether to sample or use deterministic actions
         :return: action, value and log probability of the action
         """
-        node_features, edge_features = self.extract_features(obs)
-        critic_features = th.cat([node_features, edge_features], dim=0)
+        node_features, edge_features, critic_features = self.extract_features(obs)
 
-        # (num_envs, num_nodes, embedding_dim)
-        _node_features = node_features.reshape(-1, self.num_nodes, self.features_extractor.features_dim)
-
-        # (num_envs, num_edges, embedding_dim)
-        _edge_features = edge_features.reshape(-1, self.num_edges, self.features_extractor.features_dim)
-
-        # (num_envs, (num_edges+num_nodes)*embedding_dim)
-        _critic_features = critic_features.reshape(-1, (self.num_edges+self.num_nodes)* self.features_extractor.features_dim)
-
-        latent_quantity_pi = self.mlp_extractor.forward_quantity_actor(_node_features)
-        latent_node_prob_pi = self.mlp_extractor.forward_node_probability_actor(_node_features)
-        latent_edge_prob_pi = self.mlp_extractor.forward_edge_probability_actor(_edge_features)
-        latent_vf = self.mlp_extractor.forward_critic(_critic_features)
+        latent_quantity_pi = self.mlp_extractor.forward_quantity_actor(node_features)
+        latent_node_prob_pi = self.mlp_extractor.forward_node_probability_actor(node_features)
+        latent_edge_prob_pi = self.mlp_extractor.forward_edge_probability_actor(edge_features)
+        latent_vf = self.mlp_extractor.forward_critic(critic_features)
 
         quantity_distribution = self._get_action_dist_from_latent(self.quantity_action_net, self.action_dist["quantity"], self.quanitity_log_std, latent_quantity_pi)
         node_prob_distribution = self._get_action_dist_from_latent(self.node_prob_action_net, self.action_dist["node_probability"], self.node_prob_log_std, latent_node_prob_pi)
@@ -1433,18 +1423,21 @@ class ActorCriticStatFlowPolicy(BasePolicy):
         :return: The extracted features. If features extractor is not shared, returns a tuple with the
             features for the actor and the features for the critic.
         """
-        if self.share_features_extractor:
-            return super().extract_features(obs, self.features_extractor if features_extractor is None else features_extractor)
-        else:
-            if features_extractor is not None:
-                warnings.warn(
-                    "Provided features_extractor will be ignored because the features extractor is not shared.",
-                    UserWarning,
-                )
 
-            pi_features = super().extract_features(obs, self.pi_features_extractor)
-            vf_features = super().extract_features(obs, self.vf_features_extractor)
-            return pi_features, vf_features
+        node_features, edge_features = super().extract_features(obs, self.features_extractor if features_extractor is None else features_extractor)
+        critic_features = th.cat([node_features, edge_features], dim=0)
+
+
+        # (num_envs, num_nodes, embedding_dim)
+        _node_features = node_features.reshape(-1, self.num_nodes, self.features_extractor.features_dim)
+
+        # (num_envs, num_edges, embedding_dim)
+        _edge_features = edge_features.reshape(-1, self.num_edges, self.features_extractor.features_dim)
+
+        # (num_envs, (num_edges+num_nodes)*embedding_dim)
+        _critic_features = critic_features.reshape(-1, (self.num_edges+self.num_nodes)* self.features_extractor.features_dim)
+
+        return _node_features, _edge_features, _critic_features
 
     def _get_action_dist_from_latent(self, action_net:nn.Module, action_dist:Distribution, log_std:float, latent_pi: th.Tensor) -> Distribution:
         """
@@ -1492,19 +1485,45 @@ class ActorCriticStatFlowPolicy(BasePolicy):
             and entropy of the action distribution.
         """
         # Preprocess the observation if needed
-        node_features, edge_features = self.extract_features(obs)
+        # features = self.extract_features(obs)
+        # if self.share_features_extractor:
+        #     latent_pi, latent_vf = self.mlp_extractor(features)
+        # else:
+        #     pi_features, vf_features = features
+        #     latent_pi = self.mlp_extractor.forward_actor(pi_features)
+        #     latent_vf = self.mlp_extractor.forward_critic(vf_features)
+        # distribution = self._get_action_dist_from_latent(latent_pi)
+        # log_prob = distribution.log_prob(actions)
+        # values = self.value_net(latent_vf)
+        # entropy = distribution.entropy()
+        # return values, log_prob, entropy
 
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(chosen_embeddings)
-        else:
-            pi_features, vf_features = chosen_embeddings
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        distribution = self._get_action_dist_from_latent(latent_pi)
-        log_prob = distribution.log_prob(actions)
+        node_features, edge_features, critic_features = self.extract_features(obs)
+
+        latent_quantity_pi = self.mlp_extractor.forward_quantity_actor(node_features)
+        latent_node_prob_pi = self.mlp_extractor.forward_node_probability_actor(node_features)
+        latent_edge_prob_pi = self.mlp_extractor.forward_edge_probability_actor(edge_features)
+        latent_vf = self.mlp_extractor.forward_critic(critic_features)
+
+        quantity_distribution = self._get_action_dist_from_latent(self.quantity_action_net, self.action_dist["quantity"], self.quanitity_log_std, latent_quantity_pi)
+        node_prob_distribution = self._get_action_dist_from_latent(self.node_prob_action_net, self.action_dist["node_probability"], self.node_prob_log_std, latent_node_prob_pi)
+        edge_prob_distribution = self._get_action_dist_from_latent(self.edge_prob_action_net, self.action_dist["edge_probability"], self.edge_prob_log_std, latent_edge_prob_pi)
+
+        quantity_log_prob = quantity_distribution.log_prob(actions["quantity"])
+        node_prob_log_prob = node_prob_distribution.log_prob(actions["node_probability"])
+        edge_prob_log_prob = edge_prob_distribution.log_prob(actions["edge_probability"])
+
+        log_prob_dict = dict(quantity=quantity_log_prob, 
+                        node_probability=node_prob_log_prob, 
+                        edge_probability=edge_prob_log_prob)
+        
+        entropy_dict = dict(quantity=quantity_distribution.entropy(),
+                            node_prob_entropy=node_prob_distribution.entropy(),
+                            edge_prob_entropy=edge_prob_distribution.entropy())
+        
         values = self.value_net(latent_vf)
-        entropy = distribution.entropy()
-        return values, log_prob, entropy
+
+        return values, log_prob_dict, entropy_dict
 
     def get_distribution(self, obs: PyTorchObs) -> Distribution:
         """
@@ -1513,9 +1532,25 @@ class ActorCriticStatFlowPolicy(BasePolicy):
         :param obs:
         :return: the action distribution.
         """
-        features = super().extract_features(obs, self.pi_features_extractor)
-        latent_pi = self.mlp_extractor.forward_actor(features)
-        return self._get_action_dist_from_latent(latent_pi)
+        # features = super().extract_features(obs, self.pi_features_extractor)
+        # latent_pi = self.mlp_extractor.forward_actor(features)
+        # return self._get_action_dist_from_latent(latent_pi)
+
+        node_features, edge_features, _ = self.extract_features(obs)
+
+        latent_quantity_pi = self.mlp_extractor.forward_quantity_actor(node_features)
+        latent_node_prob_pi = self.mlp_extractor.forward_node_probability_actor(node_features)
+        latent_edge_prob_pi = self.mlp_extractor.forward_edge_probability_actor(edge_features)
+
+        quantity_distribution = self._get_action_dist_from_latent(self.quantity_action_net, self.action_dist["quantity"], self.quanitity_log_std, latent_quantity_pi)
+        node_prob_distribution = self._get_action_dist_from_latent(self.node_prob_action_net, self.action_dist["node_probability"], self.node_prob_log_std, latent_node_prob_pi)
+        edge_prob_distribution = self._get_action_dist_from_latent(self.edge_prob_action_net, self.action_dist["edge_probability"], self.edge_prob_log_std, latent_edge_prob_pi)
+
+        distribution_dict = dict(quantity=quantity_distribution,
+                                 node_probability=node_prob_distribution,
+                                 edge_probability=edge_prob_distribution)
+        
+        return distribution_dict
 
     def predict_values(self, obs: PyTorchObs) -> th.Tensor:
         """
@@ -1524,7 +1559,7 @@ class ActorCriticStatFlowPolicy(BasePolicy):
         :param obs: Observation
         :return: the estimated values.
         """
-        features = super().extract_features(obs, self.vf_features_extractor)
+        _, _, features = super().extract_features(obs, self.vf_features_extractor)
         latent_vf = self.mlp_extractor.forward_critic(features)
         return self.value_net(latent_vf)
 
