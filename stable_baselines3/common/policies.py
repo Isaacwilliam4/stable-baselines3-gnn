@@ -1207,10 +1207,6 @@ class ActorCriticStatFlowPolicy(BasePolicy):
                 optimizer_kwargs["eps"] = 1e-5
         self.action_spaces = None
 
-        if isinstance(action_space, spaces.Dict):
-            self.action_spaces = action_space
-            action_space = action_space["actions"]
-
 
         super().__init__(
             observation_space,
@@ -1222,6 +1218,9 @@ class ActorCriticStatFlowPolicy(BasePolicy):
             squash_output=squash_output,
             normalize_images=normalize_images,
         )
+
+        self.num_nodes = self.observation_space['x'].shape[0]
+        self.num_edges = self.observation_space['edge_index'].shape[1]
 
         if isinstance(net_arch, list) and len(net_arch) > 0 and isinstance(net_arch[0], dict):
             warnings.warn(
@@ -1278,7 +1277,7 @@ class ActorCriticStatFlowPolicy(BasePolicy):
         self.action_dist = make_proba_distribution(action_space, use_sde=use_sde, dist_kwargs=dist_kwargs)
 
         self._build(lr_schedule)
-        self.num_nodes = self.observation_space['x'].shape[0]
+
 
     def _get_constructor_parameters(self) -> dict[str, Any]:
         data = super()._get_constructor_parameters()
@@ -1324,9 +1323,9 @@ class ActorCriticStatFlowPolicy(BasePolicy):
 
         self.mlp_extractor = FlowMlpExtractor(
             self.features_extractor.features_dim,
-            activation_fn=self.activation_fn,
             device=self.device,
-            max_extracted=self.max_extracted,
+            num_edges=self.num_edges,
+            num_nodes=self.num_nodes,
         )
 
     def _build(self, lr_schedule: Schedule) -> None:
@@ -1340,18 +1339,17 @@ class ActorCriticStatFlowPolicy(BasePolicy):
 
         latent_dim_pi = self.mlp_extractor.latent_dim_pi
 
-        if isinstance(self.action_dist, DiagGaussianDistribution):
-            self.action_net, self.log_std = self.action_dist.proba_distribution_net(
-                latent_dim=latent_dim_pi, log_std_init=self.log_std_init
-            )
-        elif isinstance(self.action_dist, StateDependentNoiseDistribution):
-            self.action_net, self.log_std = self.action_dist.proba_distribution_net(
-                latent_dim=latent_dim_pi, latent_sde_dim=latent_dim_pi, log_std_init=self.log_std_init
-            )
-        elif isinstance(self.action_dist, (CategoricalDistribution, MultiCategoricalDistribution, BernoulliDistribution)):
-            self.action_net = self.action_dist.proba_distribution_net(latent_dim=latent_dim_pi)
-        else:
-            raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
+        self.quantity_action_net, self.quanitity_log_std = self.action_dist["quantity"].proba_distribution_net(
+            latent_dim=latent_dim_pi, log_std_init=self.log_std_init
+        )
+
+        self.node_prob_action_net, self.node_prob_log_std = self.action_dist["node_probability"].proba_distribution_net(
+            latent_dim=latent_dim_pi, log_std_init=self.log_std_init
+        )
+
+        self.edge_prob_action_net, self.edge_prob_log_std = self.action_dist["edge_probability"].proba_distribution_net(
+            latent_dim=latent_dim_pi, log_std_init=self.log_std_init
+        )
 
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
         # Init weights: use orthogonal initialization
@@ -1364,7 +1362,9 @@ class ActorCriticStatFlowPolicy(BasePolicy):
             module_gains = {
                 self.features_extractor: np.sqrt(2),
                 self.mlp_extractor: np.sqrt(2),
-                self.action_net: 0.01,
+                self.quantity_action_net: 0.01,
+                self.node_prob_action_net: 0.01,
+                self.edge_prob_action_net: 0.01,
                 self.value_net: 1,
             }
             if not self.share_features_extractor:
@@ -1389,20 +1389,38 @@ class ActorCriticStatFlowPolicy(BasePolicy):
         :return: action, value and log probability of the action
         """
         node_features, edge_features = self.extract_features(obs)
+        critic_features = th.cat([node_features, edge_features], dim=0)
 
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(chosen_embeddings)
-        else:
-            pi_features, vf_features = chosen_embeddings
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        distribution = self._get_action_dist_from_latent(latent_pi)
+        # (num_envs, num_nodes, embedding_dim)
+        _node_features = node_features.reshape(-1, self.num_nodes, self.features_extractor.features_dim)
+
+        # (num_envs, num_edges, embedding_dim)
+        _edge_features = edge_features.reshape(-1, self.num_edges, self.features_extractor.features_dim)
+
+        # (num_envs, (num_edges+num_nodes)*embedding_dim)
+        _critic_features = critic_features.reshape(-1, (self.num_edges+self.num_nodes)* self.features_extractor.features_dim)
+
+        latent_quantity_pi = self.mlp_extractor.forward_quantity_actor(_node_features)
+        latent_node_prob_pi = self.mlp_extractor.forward_node_probability_actor(_node_features)
+        latent_edge_prob_pi = self.mlp_extractor.forward_edge_probability_actor(_edge_features)
+        latent_vf = self.mlp_extractor.forward_critic(_critic_features)
+
+        quantity_distribution = self._get_action_dist_from_latent(self.quantity_action_net, self.action_dist["quantity"], self.quanitity_log_std, latent_quantity_pi)
+        node_prob_distribution = self._get_action_dist_from_latent(self.node_prob_action_net, self.action_dist["node_probability"], self.node_prob_log_std, latent_node_prob_pi)
+        edge_prob_distribution = self._get_action_dist_from_latent(self.edge_prob_action_net, self.action_dist["edge_probability"], self.edge_prob_log_std, latent_edge_prob_pi)
+
+        quantity_actions = quantity_distribution.get_actions(deterministic=deterministic)
+        node_prob_actions = node_prob_distribution.get_actions(deterministic=deterministic)
+        edge_prob_actions = edge_prob_distribution.get_actions(deterministic=deterministic)
+
+        actions_dict = dict(quantity_actions=quantity_actions, node_prob_actions=node_prob_actions, edge_prob_actions=edge_prob_actions)
+        log_prob_dict = dict(quantity_log_prob=quantity_distribution.log_prob(quantity_actions), 
+                             node_prob_log_prob=node_prob_distribution.log_prob(node_prob_actions), 
+                             edge_prob_log_prob=edge_prob_distribution.log_prob(edge_prob_actions))
+        
         values = self.value_net(latent_vf)
-        actions = distribution.get_actions(deterministic=deterministic)
-        log_prob = distribution.log_prob(actions)
-        actions = actions.reshape(-1, self.max_extracted, self.max_extracted, 24)
-        actions_dict = dict(actions=actions, link_ids=choice_idxs)
-        return actions_dict, values, log_prob
+
+        return actions_dict, values, log_prob_dict
 
     def extract_features(  # type: ignore[override]
         self, obs: PyTorchObs, features_extractor: Optional[BaseFeaturesExtractor] = None
@@ -1428,28 +1446,28 @@ class ActorCriticStatFlowPolicy(BasePolicy):
             vf_features = super().extract_features(obs, self.vf_features_extractor)
             return pi_features, vf_features
 
-    def _get_action_dist_from_latent(self, latent_pi: th.Tensor) -> Distribution:
+    def _get_action_dist_from_latent(self, action_net:nn.Module, action_dist:Distribution, log_std:float, latent_pi: th.Tensor) -> Distribution:
         """
         Retrieve action distribution given the latent codes.
 
         :param latent_pi: Latent code for the actor
         :return: Action distribution
         """
-        mean_actions = self.action_net(latent_pi)
+        mean_actions = action_net(latent_pi)
 
-        if isinstance(self.action_dist, DiagGaussianDistribution):
-            return self.action_dist.proba_distribution(mean_actions, self.log_std)
-        elif isinstance(self.action_dist, CategoricalDistribution):
+        if isinstance(action_dist, DiagGaussianDistribution):
+            return action_dist.proba_distribution(mean_actions, log_std)
+        elif isinstance(action_dist, CategoricalDistribution):
             # Here mean_actions are the logits before the softmax
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
-        elif isinstance(self.action_dist, MultiCategoricalDistribution):
+            return action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(action_dist, MultiCategoricalDistribution):
             # Here mean_actions are the flattened logits
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
-        elif isinstance(self.action_dist, BernoulliDistribution):
+            return action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(action_dist, BernoulliDistribution):
             # Here mean_actions are the logits (before rounding to get the binary actions)
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
-        elif isinstance(self.action_dist, StateDependentNoiseDistribution):
-            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_pi)
+            return action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(action_dist, StateDependentNoiseDistribution):
+            return action_dist.proba_distribution(mean_actions, log_std, latent_pi)
         else:
             raise ValueError("Invalid action distribution")
 
