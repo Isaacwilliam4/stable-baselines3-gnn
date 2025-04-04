@@ -122,42 +122,52 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
             else:
                 self.rollout_buffer_class = RolloutBuffer
 
-        self.rollout_buffer = self.rollout_buffer_class(
-            self.n_steps,
-            self.observation_space,  # type: ignore[arg-type]
-            self.action_space,
-            device=self.device,
-            gamma=self.gamma,
-            gae_lambda=self.gae_lambda,
-            n_envs=self.n_envs,
-            **self.rollout_buffer_kwargs,
-        )
-        self.policy = self.policy_class(  # type: ignore[assignment]
-            self.observation_space, self.action_space, self.lr_schedule, use_sde=self.use_sde, **self.policy_kwargs
-        )
-        self.policy = self.policy.to(self.device)
-        # Warn when not using CPU with MlpPolicy
-        self._maybe_recommend_cpu()
-
-    def _maybe_recommend_cpu(self, mlp_class_name: str = "ActorCriticPolicy") -> None:
-        """
-        Recommend to use CPU only when using A2C/PPO with MlpPolicy.
-
-        :param: The name of the class for the default MlpPolicy.
-        """
-        policy_class_name = self.policy_class.__name__
-        if self.device != th.device("cpu") and policy_class_name == mlp_class_name:
-            warnings.warn(
-                f"You are trying to run {self.__class__.__name__} on the GPU, "
-                "but it is primarily intended to run on the CPU when not using a CNN policy "
-                f"(you are using {policy_class_name} which should be a MlpPolicy). "
-                "See https://github.com/DLR-RM/stable-baselines3/issues/1245 "
-                "for more info. "
-                "You can pass `device='cpu'` or `export CUDA_VISIBLE_DEVICES=` to force using the CPU."
-                "Note: The model will train, but the GPU utilization will be poor and "
-                "the training might take longer than on CPU.",
-                UserWarning,
+        self.rollout_buffers = {}
+        for key, action_space in self.action_space.spaces.items():
+            self.rollout_buffers[key] = self.rollout_buffer_class(
+                self.n_steps,
+                self.observation_space,  # type: ignore[arg-type]
+                action_space,
+                device=self.device,
+                gamma=self.gamma,
+                gae_lambda=self.gae_lambda,
+                n_envs=self.n_envs,
+                **self.rollout_buffer_kwargs,
             )
+
+        self.policies = {}
+        for key, action_space in self.action_space.spaces.items():
+            self.policies[key] = self.policy_class(  # type: ignore[assignment]
+                self.observation_space, 
+                action_space, 
+                self.lr_schedule, 
+                use_sde=self.use_sde, 
+                features_extractor_class=self.policy_kwargs["features_extractor_class"][key]
+            )
+            self.policies[key] = self.policies[key].to(self.device)
+
+        # Warn when not using CPU with MlpPolicy
+        # self._maybe_recommend_cpu()
+
+    # def _maybe_recommend_cpu(self, mlp_class_name: str = "ActorCriticPolicy") -> None:
+    #     """
+    #     Recommend to use CPU only when using A2C/PPO with MlpPolicy.
+
+    #     :param: The name of the class for the default MlpPolicy.
+    #     """
+    #     policy_class_name = self.policy_class.__name__
+    #     if self.device != th.device("cpu") and policy_class_name == mlp_class_name:
+    #         warnings.warn(
+    #             f"You are trying to run {self.__class__.__name__} on the GPU, "
+    #             "but it is primarily intended to run on the CPU when not using a CNN policy "
+    #             f"(you are using {policy_class_name} which should be a MlpPolicy). "
+    #             "See https://github.com/DLR-RM/stable-baselines3/issues/1245 "
+    #             "for more info. "
+    #             "You can pass `device='cpu'` or `export CUDA_VISIBLE_DEVICES=` to force using the CPU."
+    #             "Note: The model will train, but the GPU utilization will be poor and "
+    #             "the training might take longer than on CPU.",
+    #             UserWarning,
+    #         )
 
     def __clip_actions(self, actions: np.ndarray) -> np.ndarray:
         """
@@ -188,7 +198,7 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
         self,
         env: VecEnv,
         callback: BaseCallback,
-        rollout_buffer: RolloutBuffer,
+        rollout_buffer: dict[str, RolloutBuffer],
         n_rollout_steps: int,
     ) -> bool:
         """
@@ -206,85 +216,88 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
         """
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
-        self.policy.set_training_mode(False)
 
-        actions_dict = None
+        for key, policy in self.policies.items():
+            policy.set_training_mode(False)
 
-        n_steps = 0
-        rollout_buffer.reset()
-        # Sample new weights for the state dependent exploration
-        if self.use_sde:
-            self.policy.reset_noise(env.num_envs)
+        # self.policy.set_training_mode(False)
 
-        callback.on_rollout_start()
+        for key, _rollout_buffer in rollout_buffer.items():
+            n_steps = 0
+            _rollout_buffer.reset()
+            # Sample new weights for the state dependent exploration
+            if self.use_sde:
+                self.policies[key].reset_noise(env.num_envs)
 
-        while n_steps < n_rollout_steps:
-            if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
-                # Sample a new noise matrix
-                self.policy.reset_noise(env.num_envs)
+            callback.on_rollout_start()
+
+            while n_steps < n_rollout_steps:
+                if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
+                    # Sample a new noise matrix
+                    self.policies[key].reset_noise(env.num_envs)
+
+                with th.no_grad():
+                    # Convert to pytorch tensor or to TensorDict
+                    obs_tensor = obs_as_tensor(self._last_obs, self.device)
+                    actions, values, log_probs = self.policies[key](obs_tensor)
+
+                if isinstance(actions, dict):
+                    for key, action in actions.items():
+                        actions[key] = self.__clip_actions(action)
+                    new_obs, rewards, dones, infos = env.step(actions)
+                else:
+                    clipped_actions = self.__clip_actions(actions)
+                    new_obs, rewards, dones, infos = env.step(clipped_actions)
+
+                self.num_timesteps += env.num_envs
+
+                # Give access to local variables
+                callback.update_locals(locals())
+                if not callback.on_step():
+                    return False
+
+                self._update_info_buffer(infos, dones)
+                n_steps += 1
+
+                if isinstance(self.action_space, spaces.Discrete):
+                    # Reshape in case of discrete action
+                    actions = actions.reshape(-1, 1)
+
+                # Handle timeout by bootstrapping with value function
+                # see GitHub issue #633
+                for idx, done in enumerate(dones):
+                    if (
+                        done
+                        and infos[idx].get("terminal_observation") is not None
+                        and infos[idx].get("TimeLimit.truncated", False)
+                    ):
+                        terminal_obs = self.policies[key].obs_to_tensor(infos[idx]["terminal_observation"])[0]
+                        with th.no_grad():
+                            terminal_value = self.policies[key].predict_values(terminal_obs)[0]  # type: ignore[arg-type]
+                        rewards[idx] += self.gamma * terminal_value
+
+
+                _rollout_buffer.add(
+                    self._last_obs,  # type: ignore[arg-type]
+                    actions,
+                    rewards,
+                    self._last_episode_starts,  # type: ignore[arg-type]
+                    values,
+                    log_probs,
+                )
+
+                self._last_obs = new_obs  # type: ignore[assignment]
+                self._last_episode_starts = dones
 
             with th.no_grad():
-                # Convert to pytorch tensor or to TensorDict
-                obs_tensor = obs_as_tensor(self._last_obs, self.device)
-                actions, values, log_probs = self.policy(obs_tensor)
+                # Compute value for the last timestep
+                values = self.policies[key].predict_values(obs_as_tensor(new_obs, self.device))  # type: ignore[arg-type]
 
-            if isinstance(actions, dict):
-                for key, action in actions.items():
-                    actions[key] = self.__clip_actions(action)
-                new_obs, rewards, dones, infos = env.step(actions)
-            else:
-                clipped_actions = self.__clip_actions(actions)
-                new_obs, rewards, dones, infos = env.step(clipped_actions)
+            _rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
-            self.num_timesteps += env.num_envs
-
-            # Give access to local variables
             callback.update_locals(locals())
-            if not callback.on_step():
-                return False
 
-            self._update_info_buffer(infos, dones)
-            n_steps += 1
-
-            if isinstance(self.action_space, spaces.Discrete):
-                # Reshape in case of discrete action
-                actions = actions.reshape(-1, 1)
-
-            # Handle timeout by bootstrapping with value function
-            # see GitHub issue #633
-            for idx, done in enumerate(dones):
-                if (
-                    done
-                    and infos[idx].get("terminal_observation") is not None
-                    and infos[idx].get("TimeLimit.truncated", False)
-                ):
-                    terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
-                    with th.no_grad():
-                        terminal_value = self.policy.predict_values(terminal_obs)[0]  # type: ignore[arg-type]
-                    rewards[idx] += self.gamma * terminal_value
-
-
-            rollout_buffer.add(
-                self._last_obs,  # type: ignore[arg-type]
-                actions,
-                rewards,
-                self._last_episode_starts,  # type: ignore[arg-type]
-                values,
-                log_probs,
-            )
-
-            self._last_obs = new_obs  # type: ignore[assignment]
-            self._last_episode_starts = dones
-
-        with th.no_grad():
-            # Compute value for the last timestep
-            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))  # type: ignore[arg-type]
-
-        rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
-
-        callback.update_locals(locals())
-
-        callback.on_rollout_end()
+            callback.on_rollout_end()
 
         return True
 

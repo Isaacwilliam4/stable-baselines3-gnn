@@ -204,16 +204,14 @@ class GNNFlow(BaseFeaturesExtractor):
 
         return self.fc(x)
     
-class StatGNNFlow(BaseFeaturesExtractor):
+class GNNNodeExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space, features_dim: int = 512):
         super().__init__(observation_space, features_dim)
 
         self.linegraph_transform = LineGraph()
         node_n_input_channels = observation_space['x'].shape[1]
-        edge_input_channels = observation_space['edge_attr'].shape[1]
 
         self.node_conv1 = GCNConv(node_n_input_channels, 64)
-        self.edge_conv1 = GCNConv(edge_input_channels, 64)
         self.conv2 = GCNConv(64, 128)
         self.conv3 = GCNConv(128, 256)
         self.fc = nn.Linear(256, features_dim)
@@ -230,6 +228,38 @@ class StatGNNFlow(BaseFeaturesExtractor):
         x = self.relu(x)
         return x
     
+    def forward(self, observations):
+        """Convert SB3 observations into batched PyG Data objects"""
+        node_data_list = []
+        for i in range(len(observations['x'])):
+            d = Data(
+                x=observations['x'][i],
+                edge_index=observations['edge_index'][i].to(th.int64),
+                edge_attr=observations['edge_attr'][i]
+            )
+            node_data_list.append(d)
+
+
+        node_batch = Batch.from_data_list(node_data_list)
+
+        # Forward pass through GNN
+        node_x = self.forward_node_gnn(node_batch.x, node_batch.edge_index)
+
+        return self.fc(node_x)
+    
+class GNNEdgeExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim: int = 512):
+        super().__init__(observation_space, features_dim)
+
+        self.linegraph_transform = LineGraph()
+        edge_input_channels = observation_space['edge_attr'].shape[1]
+
+        self.edge_conv1 = GCNConv(edge_input_channels, 64)
+        self.conv2 = GCNConv(64, 128)
+        self.conv3 = GCNConv(128, 256)
+        self.fc = nn.Linear(256, features_dim)
+        self.relu = nn.ReLU()
+    
     def forward_edge_gnn(self, x, edge_index):
         """Pass data through GCN layers"""
         edge_index = edge_index.to(th.int64)
@@ -244,7 +274,6 @@ class StatGNNFlow(BaseFeaturesExtractor):
 
     def forward(self, observations):
         """Convert SB3 observations into batched PyG Data objects"""
-        node_data_list = []
         edge_data_list = []
         for i in range(len(observations['x'])):
             d = Data(
@@ -252,18 +281,15 @@ class StatGNNFlow(BaseFeaturesExtractor):
                 edge_index=observations['edge_index'][i].to(th.int64),
                 edge_attr=observations['edge_attr'][i]
             )
-            node_data_list.append(d)
             edge_data_list.append(self.linegraph_transform(d))
 
 
-        node_batch = Batch.from_data_list(node_data_list)
         edge_batch = Batch.from_data_list(edge_data_list)
 
         # Forward pass through GNN
-        node_x = self.forward_node_gnn(node_batch.x, node_batch.edge_index)
         edge_x = self.forward_edge_gnn(edge_batch.x, edge_batch.edge_index)
 
-        return self.fc(node_x), self.fc(edge_x)
+        return self.fc(edge_x)
 
 
 def create_mlp(
@@ -370,8 +396,7 @@ class FlowMlpExtractor(nn.Module):
     def __init__(
         self,
         feature_dim: int,
-        num_nodes:int,
-        num_edges:int,
+        value_feature_dim: int,
         device: Union[th.device, str] = "auto",
     ) -> None:
         super().__init__()
@@ -380,48 +405,32 @@ class FlowMlpExtractor(nn.Module):
         self.latent_dim_pi = 64
         self.latent_dim_vf = 64
         
-        self.quantity_policy = nn.Sequential(
+        self.policy_net = nn.Sequential(
             nn.Linear(feature_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, self.latent_dim_pi),
         ).to(device)    
-
-        self.node_prob_policy = nn.Sequential(
-            nn.Linear(feature_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, self.latent_dim_pi),
-        ).to(device)    
-
-        self.edge_prob_policy = nn.Sequential(
-            nn.Linear(feature_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, self.latent_dim_pi),
-        ).to(device)    
-
+  
         self.value_net = nn.Sequential(
-            nn.Linear((num_edges+num_nodes)*feature_dim, 256),
+            nn.Linear(value_feature_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, self.latent_dim_pi),
         ).to(device)    
 
-
-    def forward_quantity_actor(self, features: th.Tensor) -> th.Tensor:
-        return self.quantity_policy(features)
+    def forward(self, features: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """
+        :return: latent_policy, latent_value of the specified network.
+            If all layers are shared, then ``latent_policy == latent_value``
+        """
+        return self.forward_actor(features), self.forward_critic(features)
     
-    def forward_node_probability_actor(self, features: th.Tensor) -> th.Tensor:
-        return self.node_prob_policy(features)
+    def forward_actor(self, features: th.Tensor) -> th.Tensor:
+        return self.policy_net(features)
     
-    def forward_edge_probability_actor(self, features: th.Tensor) -> th.Tensor:
-        return self.edge_prob_policy(features)
-
     def forward_critic(self, features: th.Tensor) -> th.Tensor:
         return self.value_net(features)
     

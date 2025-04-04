@@ -208,8 +208,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
 
-        actions_dict = None
-
         n_steps = 0
         rollout_buffer.reset()
         # Sample new weights for the state dependent exploration
