@@ -198,7 +198,7 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
         self,
         env: VecEnv,
         callback: BaseCallback,
-        rollout_buffer: dict[str, RolloutBuffer],
+        rollout_buffers: dict[str, RolloutBuffer],
         n_rollout_steps: int,
     ) -> bool:
         """
@@ -222,7 +222,7 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
 
         # self.policy.set_training_mode(False)
 
-        for key, _rollout_buffer in rollout_buffer.items():
+        for key, _rollout_buffer in rollout_buffers.items():
             n_steps = 0
             _rollout_buffer.reset()
             # Sample new weights for the state dependent exploration
@@ -355,7 +355,7 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
         assert self.env is not None
 
         while self.num_timesteps < total_timesteps:
-            continue_training = self.collect_rollouts(self.env, callback, self.rollout_buffer, n_rollout_steps=self.n_steps)
+            continue_training = self.collect_rollouts(self.env, callback, self.rollout_buffers, n_rollout_steps=self.n_steps)
 
             if not continue_training:
                 break
