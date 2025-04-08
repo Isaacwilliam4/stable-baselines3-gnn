@@ -167,14 +167,14 @@ class GNN(BaseFeaturesExtractor):
         return self.fc(x)
 
 class GNNFlow(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim: int = 512):
+    def __init__(self, observation_space, features_dim: int = 64):
         super().__init__(observation_space, features_dim)
         n_input_channels = observation_space['x'].shape[1]
 
-        self.conv1 = GCNConv(n_input_channels, 64)
-        self.conv2 = GCNConv(64, 128)
-        self.conv3 = GCNConv(128, 256)
-        self.fc = nn.Linear(256, features_dim)
+        self.conv1 = GCNConv(n_input_channels, 16)
+        self.conv2 = GCNConv(16, 32)
+        self.conv3 = GCNConv(32, 64)
+        self.fc = nn.Linear(64, features_dim)
         self.relu = nn.ReLU()
 
     def forward_gnn(self, x, edge_index):
@@ -205,23 +205,23 @@ class GNNFlow(BaseFeaturesExtractor):
         return self.fc(x)
     
 class GNNNodeExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim: int = 512):
+    def __init__(self, observation_space, features_dim: int = 64):
         super().__init__(observation_space, features_dim)
 
         self.linegraph_transform = LineGraph()
         n_input_channels = observation_space['x'].shape[1]
         self.num_entities = observation_space['x'].shape[0]
 
-        self.node_conv1 = GCNConv(n_input_channels, 64)
-        self.conv2 = GCNConv(64, 128)
-        self.conv3 = GCNConv(128, 256)
-        self.fc = nn.Linear(256, features_dim)
+        self.conv1 = GCNConv(n_input_channels, 16)
+        self.conv2 = GCNConv(16, 32)
+        self.conv3 = GCNConv(32, 64)
+        self.fc = nn.Linear(64, features_dim)
         self.relu = nn.ReLU()
 
     def forward_node_gnn(self, x, edge_index):
         """Pass data through GCN layers"""
         edge_index = edge_index.to(th.int64)
-        x = self.node_conv1(x, edge_index)
+        x = self.conv1(x, edge_index)
         x = self.relu(x)
         x = self.conv2(x, edge_index)
         x = self.relu(x)
@@ -250,23 +250,23 @@ class GNNNodeExtractor(BaseFeaturesExtractor):
         return self.fc(node_x).reshape(batch_size, -1, self.features_dim)
     
 class GNNEdgeExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim: int = 512):
+    def __init__(self, observation_space, features_dim: int = 64):
         super().__init__(observation_space, features_dim)
 
         self.linegraph_transform = LineGraph()
         n_input_channels = observation_space['edge_attr'].shape[1]
         self.num_entities = observation_space['edge_index'].shape[1]
 
-        self.edge_conv1 = GCNConv(n_input_channels, 64)
-        self.conv2 = GCNConv(64, 128)
-        self.conv3 = GCNConv(128, 256)
-        self.fc = nn.Linear(256, features_dim)
+        self.conv1 = GCNConv(n_input_channels, 16)
+        self.conv2 = GCNConv(16, 32)
+        self.conv3 = GCNConv(32, 64)
+        self.fc = nn.Linear(64, features_dim)
         self.relu = nn.ReLU()
     
     def forward_edge_gnn(self, x, edge_index):
         """Pass data through GCN layers"""
         edge_index = edge_index.to(th.int64)
-        x = self.edge_conv1(x, edge_index)
+        x = self.conv1(x, edge_index)
         x = self.relu(x)
         x = self.conv2(x, edge_index)
         x = self.relu(x)

@@ -297,9 +297,9 @@ class MultiActorPPO(MultiOnPolicyAlgorithm):
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
 
-        for key, _policy in self.policy.items():
-            if hasattr(self.policy, "log_std"):
-                self.logger.record(f"train/std: {key}", th.exp(self.policy.log_std).mean().item())
+        for key, _policy in self.policies.items():
+            if hasattr(_policy, "log_std"):
+                self.logger.record(f"train/std: {key}", th.exp(_policy.log_std).mean().item())
 
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
