@@ -503,37 +503,37 @@ class FlowMlpExtractor(nn.Module):
     ) -> None:
         super().__init__()
         device = get_device(device)
-        policy_net: list[nn.Module] = []
-        value_net: list[nn.Module] = []
-        last_layer_dim_pi = feature_dim
-        last_layer_dim_vf = feature_dim
 
-        # save dimensions of layers in policy and value nets
-        if isinstance(net_arch, dict):
-            # Note: if key is not specified, assume linear network
-            pi_layers_dims = net_arch.get("pi", [])  # Layer sizes of the policy network
-            vf_layers_dims = net_arch.get("vf", [])  # Layer sizes of the value network
-        else:
-            pi_layers_dims = vf_layers_dims = net_arch
-        # Iterate through the policy layers and build the policy net
-        for curr_layer_dim in pi_layers_dims:
-            policy_net.append(nn.Linear(last_layer_dim_pi, curr_layer_dim))
-            policy_net.append(activation_fn())
-            last_layer_dim_pi = curr_layer_dim
-        # Iterate through the value layers and build the value net
-        for curr_layer_dim in vf_layers_dims:
-            value_net.append(nn.Linear(last_layer_dim_vf, curr_layer_dim))
-            value_net.append(activation_fn())
-            last_layer_dim_vf = curr_layer_dim
+        first_layer_dim = 512
+        second_layer_dim = 256
+        third_layer_dim = 128
+        output_dim = 64
 
-        # Save dim, used to create the distributions
-        self.latent_dim_pi = last_layer_dim_pi
-        self.latent_dim_vf = last_layer_dim_vf
+        self.policy_net = nn.Sequential(
+            nn.Linear(feature_dim, first_layer_dim),
+            activation_fn(),
+            nn.Linear(first_layer_dim, second_layer_dim),
+            activation_fn(),
+            nn.Linear(second_layer_dim, third_layer_dim),
+            activation_fn(),
+            nn.Linear(third_layer_dim, output_dim),
+            activation_fn()
+        ).to(device)
 
-        # Create networks
-        # If the list of layers is empty, the network will just act as an Identity module
-        self.policy_net = nn.Sequential(*policy_net).to(device)
-        self.value_net = nn.Sequential(*value_net).to(device)
+        self.value_net = nn.Sequential(
+            nn.Linear(feature_dim, first_layer_dim),
+            activation_fn(),
+            nn.Linear(first_layer_dim, second_layer_dim),
+            activation_fn(),
+            nn.Linear(second_layer_dim, third_layer_dim),
+            activation_fn(),
+            nn.Linear(third_layer_dim, output_dim),
+            activation_fn()
+        ).to(device)
+
+        self.latent_dim_pi = output_dim
+        self.latent_dim_vf = output_dim
+
 
     def forward(self, features: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
