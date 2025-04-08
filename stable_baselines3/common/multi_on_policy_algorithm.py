@@ -241,13 +241,10 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
                     obs_tensor = obs_as_tensor(self._last_obs, self.device)
                     actions, values, log_probs = self.policies[key](obs_tensor)
 
-                if isinstance(actions, dict):
-                    for key, action in actions.items():
-                        actions[key] = self.__clip_actions(action)
-                    new_obs, rewards, dones, infos = env.step(actions)
-                else:
-                    clipped_actions = self.__clip_actions(actions)
-                    new_obs, rewards, dones, infos = env.step(clipped_actions)
+
+                clipped_actions = self.__clip_actions(actions)
+                actions_list = [(key, clipped_actions[i]) for i in range(len(actions))]
+                new_obs, rewards, dones, infos = env.step(actions_list)
 
                 self.num_timesteps += env.num_envs
 
