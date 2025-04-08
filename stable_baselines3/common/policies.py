@@ -1341,7 +1341,7 @@ class ActorCriticFlowPolicy(BasePolicy):
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
 
-        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf*self.features_extractor.num_entities, 1)
+        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
         if self.ortho_init:
@@ -1459,7 +1459,7 @@ class ActorCriticFlowPolicy(BasePolicy):
         :param obs:
         :return: the action distribution.
         """
-        features = super().extract_features(obs, self.pi_features_extractor)
+        features = self.extract_features(obs, self.pi_features_extractor)
         latent_pi = self.mlp_extractor.forward_actor(features)
         return self._get_action_dist_from_latent(latent_pi)
 
@@ -1470,10 +1470,9 @@ class ActorCriticFlowPolicy(BasePolicy):
         :param obs: Observation
         :return: the estimated values.
         """
-        features = super().extract_features(obs, self.vf_features_extractor)
+        features = self.extract_features(obs, self.vf_features_extractor)
         latent_vf = self.mlp_extractor.forward_critic(features)
         return self.value_net(latent_vf)
- 
 
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
@@ -1493,7 +1492,6 @@ class ActorCriticFlowPolicy(BasePolicy):
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
         # Evaluate the values for the given observations
-        latent_vf = latent_vf.reshape(-1, latent_vf.shape[1]*latent_vf.shape[2])
         values = self.value_net(latent_vf)
         distribution = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)

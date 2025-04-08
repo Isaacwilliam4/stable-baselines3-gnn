@@ -189,7 +189,7 @@ class MultiActorPPO(MultiOnPolicyAlgorithm):
         Update policy using the currently gathered rollout buffer.
         """
         explained_var = 0
-        for key, _policy in self.policy.items():
+        for key, _policy in self.policies.items():
             # Switch to train mode (this affects batch norm / dropout)
             _policy.set_training_mode(True)
             # Update optimizer learning rate
@@ -209,7 +209,7 @@ class MultiActorPPO(MultiOnPolicyAlgorithm):
             for epoch in range(self.n_epochs):
                 approx_kl_divs = []
                 # Do a complete pass on the rollout buffer
-                for rollout_data in self.rollout_buffer[key].get(self.batch_size):
+                for rollout_data in self.rollout_buffers[key].get(self.batch_size):
                     actions = rollout_data.actions
                     if isinstance(self.action_space, spaces.Discrete):
                         # Convert discrete action from float to long
@@ -286,7 +286,7 @@ class MultiActorPPO(MultiOnPolicyAlgorithm):
                 if not continue_training:
                     break
 
-                explained_var += explained_variance(self.rollout_buffer[key].values.flatten(), self.rollout_buffer[key].returns.flatten())
+                explained_var += explained_variance(self.rollout_buffers[key].values.flatten(), self.rollout_buffers[key].returns.flatten())
 
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))

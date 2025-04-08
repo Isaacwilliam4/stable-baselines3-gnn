@@ -279,10 +279,10 @@ class MultiOnPolicyAlgorithm(BaseAlgorithm):
 
                 _rollout_buffer.add(
                     self._last_obs,  # type: ignore[arg-type]
-                    actions,
+                    actions.cpu(),
                     rewards,
                     self._last_episode_starts,  # type: ignore[arg-type]
-                    values,
+                    values.cpu(),
                     log_probs,
                 )
 

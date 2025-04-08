@@ -506,17 +506,14 @@ class FlowMlpExtractor(nn.Module):
 
         first_layer_dim = 512
         second_layer_dim = 256
-        third_layer_dim = 128
-        output_dim = 64
+        output_dim = 128
 
         self.policy_net = nn.Sequential(
             nn.Linear(feature_dim, first_layer_dim),
             activation_fn(),
             nn.Linear(first_layer_dim, second_layer_dim),
             activation_fn(),
-            nn.Linear(second_layer_dim, third_layer_dim),
-            activation_fn(),
-            nn.Linear(third_layer_dim, output_dim),
+            nn.Linear(second_layer_dim, output_dim),
             activation_fn()
         ).to(device)
 
@@ -525,9 +522,7 @@ class FlowMlpExtractor(nn.Module):
             activation_fn(),
             nn.Linear(first_layer_dim, second_layer_dim),
             activation_fn(),
-            nn.Linear(second_layer_dim, third_layer_dim),
-            activation_fn(),
-            nn.Linear(third_layer_dim, output_dim),
+            nn.Linear(second_layer_dim, output_dim),
             activation_fn()
         ).to(device)
 
